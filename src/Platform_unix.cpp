@@ -21,8 +21,17 @@
  *   along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+
+#ifdef __FreeBSD__
+#   include <sys/types.h>
+#   include <sys/param.h>
+#   include <sys/cpuset.h>
+#   include <pthread_np.h>
+#endif
+
+
+#include <pthread.h>
 #include <sched.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
@@ -34,6 +43,11 @@
 
 #ifdef XMRIG_NVIDIA_PROJECT
 #   include "nvidia/cryptonight.h"
+#endif
+
+
+#ifdef __FreeBSD__
+typedef cpuset_t cpu_set_t;
 #endif
 
 
@@ -79,6 +93,14 @@ void Platform::setProcessPriority(int priority)
 {
 }
 
+
+void Platform::setThreadAffinity(uint64_t cpu_id)
+{
+    cpu_set_t mn;
+    CPU_ZERO(&mn);
+    CPU_SET(cpu_id, &mn);
+    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &mn);
+}
 
 
 void Platform::setThreadPriority(int priority)

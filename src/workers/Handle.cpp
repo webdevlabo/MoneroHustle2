@@ -23,15 +23,17 @@
 
 
 #include "workers/Handle.h"
+#include "workers/GpuThread.h"
 
 
-Handle::Handle(int threadId, int threads, int64_t affinity, int priority) :
-    m_priority(priority),
+Handle::Handle(int threadId, GpuThread *thread, int threads, bool lite) :
+    m_lite(lite),
+    m_gpuThread(thread),
     m_threadId(threadId),
     m_threads(threads),
-    m_affinity(affinity),
     m_worker(nullptr)
 {
+    thread->setThreadId(threadId);
 }
 
 

@@ -37,10 +37,11 @@
 
 
 struct cryptonight_ctx {
-    VAR_ALIGN(16, uint8_t state0[200]);
-    VAR_ALIGN(16, uint8_t state1[200]);
-    VAR_ALIGN(16, uint8_t* memory);
+    uint8_t state0[200];
+    uint8_t state1[200];
+    uint8_t memory[MEMORY];
 };
+
 
 
 class Job;

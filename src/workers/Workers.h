@@ -44,11 +44,12 @@ class Workers
 public:
     static Job job();
     static void printHashrate(bool detail);
+    static void printHealth();
     static void setEnabled(bool enabled);
     static void setJob(const Job &job);
-    static void start(int64_t affinity, int priority);
+    static void start(const std::vector<GpuThread*> &threads);
     static void stop();
-    static void submit(const JobResult &result);
+    static void submit(const Job &result);
 
     static inline bool isEnabled()                               { return m_enabled; }
     static inline bool isOutdated(uint64_t sequence)             { return m_sequence.load(std::memory_order_relaxed) != sequence; }
@@ -60,6 +61,7 @@ public:
 private:
     static void onReady(void *arg);
     static void onResult(uv_async_t *handle);
+    static void onReport(uv_timer_t *handle);
     static void onTick(uv_timer_t *handle);
 
     static bool m_active;
@@ -69,12 +71,13 @@ private:
     static Job m_job;
     static std::atomic<int> m_paused;
     static std::atomic<uint64_t> m_sequence;
-    static std::list<JobResult> m_queue;
+    static std::list<Job> m_queue;
     static std::vector<Handle*> m_workers;
     static uint64_t m_ticks;
     static uv_async_t m_async;
     static uv_mutex_t m_mutex;
     static uv_rwlock_t m_rwlock;
+    static uv_timer_t m_reportTimer;
     static uv_timer_t m_timer;
 };
 

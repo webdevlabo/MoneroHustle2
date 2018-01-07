@@ -22,7 +22,8 @@
  */
 
 
-#include <stdio.h>
+#include <mach/thread_act.h>
+#include <mach/thread_policy.h>
 #include <stdlib.h>
 #include <sys/resource.h>
 #include <uv.h>
@@ -67,7 +68,15 @@ void Platform::release()
 
 void Platform::setProcessPriority(int priority)
 {
+}
 
+
+void Platform::setThreadAffinity(uint64_t cpu_id)
+{
+    thread_port_t mach_thread;
+    thread_affinity_policy_data_t policy = { static_cast<integer_t>(cpu_id) };
+    mach_thread = pthread_mach_thread_np(pthread_self());
+    thread_policy_set(mach_thread, THREAD_AFFINITY_POLICY, (thread_policy_t)&policy, 1);
 }
 
 

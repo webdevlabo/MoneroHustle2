@@ -31,6 +31,10 @@
 #include "log/Log.h"
 
 
+static const char k500 []    = "{\"error\":\"INTERNAL_SERVER_ERROR\"}";
+static const size_t k500Size = sizeof(k500) - 1;
+
+
 Httpd::Httpd(int port, const char *accessToken) :
     m_accessToken(accessToken),
     m_port(port),
@@ -111,6 +115,6 @@ int Httpd::handler(void *cls, struct MHD_Connection *connection, const char *url
         return MHD_NO;
     }
 
-    MHD_Response *rsp = MHD_create_response_from_buffer(strlen(buf), (void*) buf, MHD_RESPMEM_MUST_FREE);
+    MHD_Response *rsp = MHD_create_response_from_buffer(strlen(buf), (void*)buf, MHD_RESPMEM_MUST_FREE);
     return done(connection, status, rsp);
 }

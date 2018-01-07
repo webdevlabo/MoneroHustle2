@@ -23,17 +23,17 @@
 
 
 #include <inttypes.h>
-#include <stdio.h>
 #include <uv.h>
 
 
 #include "Cpu.h"
 #include "log/Log.h"
-#include "Mem.h"
 #include "net/Url.h"
+#include "nvidia/cryptonight.h"
 #include "Options.h"
 #include "Summary.h"
 #include "version.h"
+#include "workers/GpuThread.h"
 
 
 static void print_versions()
@@ -50,62 +50,33 @@ static void print_versions()
     buf[0] = '\0';
 #   endif
 
-
-    Log::i()->text(Options::i()->colors() ? "\x1B[01;32m * \x1B[01;37mVERSIONS:     \x1B[01;36mXMRig/%s\x1B[01;37m libuv/%s%s" : " * VERSIONS:     XMRig/%s libuv/%s%s",
-                   APP_VERSION, uv_version_string(), buf);
-}
-
-
-static void print_memory() {
-    if (Options::i()->colors()) {
-        Log::i()->text("\x1B[01;32m * \x1B[01;37mHUGE PAGES:   %s, %s",
-                       Mem::isHugepagesAvailable() ? "\x1B[01;32mavailable" : "\x1B[01;31munavailable",
-                       Mem::isHugepagesEnabled() ? "\x1B[01;32menabled" : "\x1B[01;31mdisabled");
-    }
-    else {
-        Log::i()->text(" * HUGE PAGES:   %s, %s", Mem::isHugepagesAvailable() ? "available" : "unavailable", Mem::isHugepagesEnabled() ? "enabled" : "disabled");
-    }
+    const int cudaVersion = cuda_get_runtime_version();
+    Log::i()->text(Options::i()->colors() ? "\x1B[01;32m * \x1B[01;37mVERSIONS:     \x1B[01;36mXMRig/%s\x1B[01;37m libuv/%s CUDA/%d.%d%s" : " * VERSIONS:     XMRig/%s libuv/%s CUDA/%d.%d%s",
+                   APP_VERSION, uv_version_string(), cudaVersion / 1000, cudaVersion % 100, buf);
 }
 
 
 static void print_cpu()
 {
     if (Options::i()->colors()) {
-        Log::i()->text("\x1B[01;32m * \x1B[01;37mCPU:          %s (%d) %sx64 %sAES-NI",
+        Log::i()->text("\x1B[01;32m * \x1B[01;37mCPU:          %s %sx64 %sAES-NI",
                        Cpu::brand(),
-                       Cpu::sockets(),
                        Cpu::isX64() ? "\x1B[01;32m" : "\x1B[01;31m-",
                        Cpu::hasAES() ? "\x1B[01;32m" : "\x1B[01;31m-");
-#       ifndef XMRIG_NO_LIBCPUID
-        Log::i()->text("\x1B[01;32m * \x1B[01;37mCPU L2/L3:    %.1f MB/%.1f MB", Cpu::l2() / 1024.0, Cpu::l3() / 1024.0);
-#       endif
     }
     else {
         Log::i()->text(" * CPU:          %s (%d) %sx64 %sAES-NI", Cpu::brand(), Cpu::sockets(), Cpu::isX64() ? "" : "-", Cpu::hasAES() ? "" : "-");
-#       ifndef XMRIG_NO_LIBCPUID
-        Log::i()->text(" * CPU L2/L3:    %.1f MB/%.1f MB", Cpu::l2() / 1024.0, Cpu::l3() / 1024.0);
-#       endif
     }
 }
 
 
-static void print_threads()
+static void print_algo()
 {
-    char buf[32];
-    if (Options::i()->affinity() != -1L) {
-        snprintf(buf, 32, ", affinity=0x%" PRIX64, Options::i()->affinity());
-    }
-    else {
-        buf[0] = '\0';
-    }
-
-    Log::i()->text(Options::i()->colors() ? "\x1B[01;32m * \x1B[01;37mTHREADS:      \x1B[01;36m%d\x1B[01;37m, %s, av=%d, %sdonate=%d%%%s" : " * THREADS:      %d, %s, av=%d, %sdonate=%d%%%s",
-                   Options::i()->threads(),
+    Log::i()->text(Options::i()->colors() ? "\x1B[01;32m * \x1B[01;37mALGO:         %s, %sdonate=%d%%" : " * ALGO:         %s, %sdonate=%d%%",
                    Options::i()->algoName(),
-                   Options::i()->algoVariant(),
                    Options::i()->colors() && Options::i()->donateLevel() == 0 ? "\x1B[01;31m" : "",
-                   Options::i()->donateLevel(),
-                   buf);
+                   Options::i()->donateLevel()
+    );
 }
 
 
@@ -128,6 +99,26 @@ static void print_pools()
 }
 
 
+static void print_gpu()
+{
+    for (const GpuThread *thread : Options::i()->threads()) {
+        Log::i()->text(Options::i()->colors() ? "\x1B[01;32m * \x1B[01;37mGPU #%d:       \x1B[22;32m%s @ %d/%d MHz \x1B[01;30m%dx%d %dx%d arch:%d%d SMX:%d" : " * GPU #%d:       %s @ %d/%d MHz %dx%d %dx%d arch:%d%d SMX:%d",
+            thread->index(),
+            thread->name(),
+            thread->clockRate() / 1000,
+            thread->memoryClockRate() / 1000,
+            thread->threads(),
+            thread->blocks(),
+            thread->bfactor(),
+            thread->bsleep(),
+            thread->arch()[0],
+            thread->arch()[1],
+            thread->smx()
+        );
+    }
+}
+
+
 #ifndef XMRIG_NO_API
 static void print_api()
 {
@@ -143,20 +134,40 @@ static void print_api()
 static void print_commands()
 {
     if (Options::i()->colors()) {
-        Log::i()->text("\x1B[01;32m * \x1B[01;37mCOMMANDS:     \x1B[01;35mh\x1B[01;37mashrate, \x1B[01;35mp\x1B[01;37mause, \x1B[01;35mr\x1B[01;37mesume");
+        Log::i()->text("\x1B[01;32m * \x1B[01;37mCOMMANDS:     \x1B[01;35mh\x1B[01;37mashrate, h\x1B[01;35me\x1B[01;37malth, \x1B[01;35mp\x1B[01;37mause, \x1B[01;35mr\x1B[01;37mesume");
     }
     else {
-        Log::i()->text(" * COMMANDS:     'h' hashrate, 'p' pause, 'r' resume");
+        Log::i()->text(" * COMMANDS:     'h' hashrate, 'e' health, 'p' pause, 'r' resume");
     }
 }
 
 
-void Summary::print()
+static bool print_extra()
+{
+    const std::vector<GpuThread*> &threads = Options::i()->threads();
+    if (threads.empty()) {
+        LOG_ERR("No CUDA device found!");
+        return false;
+    }
+
+    if (!Options::i()->isAutoConf()) {
+        return true;
+    }
+
+    if (Options::i()->save()) {
+        Log::i()->text("Initial configuration saved to: %s", Options::i()->configName());
+    }
+
+    return true;
+}
+
+
+bool Summary::print()
 {
     print_versions();
-    print_memory();
     print_cpu();
-    print_threads();
+    print_gpu();
+    print_algo();
     print_pools();
 
 #   ifndef XMRIG_NO_API
@@ -164,6 +175,8 @@ void Summary::print()
 #   endif
 
     print_commands();
+    
+    return print_extra();
 }
 
 

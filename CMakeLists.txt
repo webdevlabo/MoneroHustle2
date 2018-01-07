@@ -1,12 +1,10 @@
-cmake_minimum_required(VERSION 2.8)
-project(xmrig)
+cmake_minimum_required(VERSION 3.0)
+project(xmrig-nvidia)
 
-option(WITH_LIBCPUID "Use Libcpuid" ON)
-option(WITH_AEON     "CryptoNight-Lite support" ON)
-option(WITH_HTTPD    "HTTP REST API" ON)
+option(WITH_AEON  "CryptoNight-Lite support" ON)
+option(WITH_HTTPD "HTTP REST API" ON)
 
 include (CheckIncludeFile)
-include (cmake/cpu.cmake)
 
 
 set(HEADERS
@@ -27,7 +25,6 @@ set(HEADERS
     src/log/ConsoleLog.h
     src/log/FileLog.h
     src/log/Log.h
-    src/Mem.h
     src/net/Client.h
     src/net/Job.h
     src/net/JobId.h
@@ -38,15 +35,17 @@ set(HEADERS
     src/net/strategies/SinglePoolStrategy.h
     src/net/SubmitResult.h
     src/net/Url.h
+    src/nvidia/CudaCLI.h
+    src/nvidia/Health.h
+    src/nvidia/NvmlApi.h
     src/Options.h
     src/Platform.h
     src/Summary.h
     src/version.h
-    src/workers/DoubleWorker.h
+    src/workers/CudaWorker.h
+    src/workers/GpuThread.h
     src/workers/Handle.h
     src/workers/Hashrate.h
-    src/workers/SingleWorker.h
-    src/workers/Worker.h
     src/workers/Workers.h
    )
 
@@ -57,18 +56,12 @@ set(HEADERS_CRYPTO
     src/crypto/c_keccak.h
     src/crypto/c_skein.h
     src/crypto/CryptoNight.h
+    src/crypto/CryptoNight_p.h
     src/crypto/CryptoNight_test.h
     src/crypto/groestl_tables.h
     src/crypto/hash.h
     src/crypto/skein_port.h
-    src/crypto/soft_aes.h
    )
-
-if (XMRIG_ARM)
-    set(HEADERS_CRYPTO "${HEADERS_CRYPTO}" src/crypto/CryptoNight_arm.h)
-else()
-    set(HEADERS_CRYPTO "${HEADERS_CRYPTO}" src/crypto/CryptoNight_x86.h)
-endif()
 
 set(SOURCES
     src/api/Api.cpp
@@ -76,10 +69,10 @@ set(SOURCES
     src/api/NetworkState.cpp
     src/App.cpp
     src/Console.cpp
+    src/Cpu_stub.cpp
     src/log/ConsoleLog.cpp
     src/log/FileLog.cpp
     src/log/Log.cpp
-    src/Mem.cpp
     src/net/Client.cpp
     src/net/Job.cpp
     src/net/Network.cpp
@@ -88,14 +81,14 @@ set(SOURCES
     src/net/strategies/SinglePoolStrategy.cpp
     src/net/SubmitResult.cpp
     src/net/Url.cpp
+    src/nvidia/CudaCLI.cpp
     src/Options.cpp
     src/Platform.cpp
     src/Summary.cpp
-    src/workers/DoubleWorker.cpp
+    src/workers/CudaWorker.cpp
+    src/workers/GpuThread.cpp
     src/workers/Handle.cpp
     src/workers/Hashrate.cpp
-    src/workers/SingleWorker.cpp
-    src/workers/Worker.cpp
     src/workers/Workers.cpp
     src/xmrig.cpp
    )
@@ -106,6 +99,8 @@ set(SOURCES_CRYPTO
     src/crypto/c_blake256.c
     src/crypto/c_jh.c
     src/crypto/c_skein.c
+    src/crypto/soft_aes.c
+    src/crypto/soft_aes.c
     src/crypto/CryptoNight.cpp
    )
 
@@ -114,7 +109,6 @@ if (WIN32)
         res/app.rc
         src/App_win.cpp
         src/Cpu_win.cpp
-        src/Mem_win.cpp
         src/Platform_win.cpp
         )
 
@@ -124,55 +118,45 @@ elseif (APPLE)
     set(SOURCES_OS
         src/App_unix.cpp
         src/Cpu_mac.cpp
-        src/Mem_unix.cpp
         src/Platform_mac.cpp
         )
 else()
     set(SOURCES_OS
         src/App_unix.cpp
         src/Cpu_unix.cpp
-        src/Mem_unix.cpp
         src/Platform_unix.cpp
         )
 
-    set(EXTRA_LIBS pthread rt)
+    set(EXTRA_LIBS pthread)
 endif()
 
-if (CMAKE_SYSTEM_NAME STREQUAL FreeBSD)
-    set(EXTRA_LIBS ${EXTRA_LIBS} kvm)
-endif()
-
-if (CMAKE_SYSTEM_NAME MATCHES "Linux")
-    EXECUTE_PROCESS(COMMAND uname -o COMMAND tr -d '\n' OUTPUT_VARIABLE OPERATING_SYSTEM)
-    if (OPERATING_SYSTEM MATCHES "Android")
-        set(EXTRA_LIBS ${EXTRA_LIBS} log)
-    endif()
-endif()
-
-add_definitions(/D__STDC_FORMAT_MACROS)
+add_definitions(/DXMRIG_NVIDIA_PROJECT)
 add_definitions(/DUNICODE)
+add_definitions(/DXMRIG_NO_LIBCPUID)
+add_definitions(/D__STDC_FORMAT_MACROS)
+add_definitions(/DRAPIDJSON_SSE2)
 #add_definitions(/DAPP_DEBUG)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake")
 
 find_package(UV REQUIRED)
 
+if ("${CMAKE_BUILD_TYPE}" STREQUAL "")
+    set(CMAKE_BUILD_TYPE Release)
+endif()
+
 include(cmake/flags.cmake)
+include(cmake/CUDA.cmake)
 
-if (WITH_LIBCPUID)
-    add_subdirectory(src/3rdparty/libcpuid)
+find_package(NVML)
+if (NVML_FOUND)
+    include_directories(${NVML_INCLUDE_DIR})
 
-    include_directories(src/3rdparty/libcpuid)
-    set(CPUID_LIB cpuid)
-    set(SOURCES_CPUID src/Cpu.cpp)
+    set(SOURCES_NVML src/nvidia/NvmlApi.cpp)
 else()
-    add_definitions(/DXMRIG_NO_LIBCPUID)
+    add_definitions(/DXMRIG_NO_NVML)
 
-    if (XMRIG_ARM)
-        set(SOURCES_CPUID src/Cpu_arm.cpp)
-    else()
-        set(SOURCES_CPUID src/Cpu_stub.cpp)
-    endif()
+    set(SOURCES_NVML src/nvidia/NvmlApi_stub.cpp)
 endif()
 
 CHECK_INCLUDE_FILE (syslog.h HAVE_SYSLOG_H)
@@ -197,11 +181,13 @@ if (WITH_HTTPD)
 else()
     add_definitions(/DXMRIG_NO_HTTPD)
     add_definitions(/DXMRIG_NO_API)
+
+    set(MHD_LIBRARY "")
 endif()
 
 include_directories(src)
 include_directories(src/3rdparty)
 include_directories(${UV_INCLUDE_DIR})
 
-add_executable(xmrig ${HEADERS} ${SOURCES} ${SOURCES_OS} ${SOURCES_CPUID} ${HEADERS_CRYPTO} ${SOURCES_CRYPTO} ${SOURCES_SYSLOG} ${HTTPD_SOURCES})
-target_link_libraries(xmrig ${UV_LIBRARIES} ${MHD_LIBRARY} ${EXTRA_LIBS} ${CPUID_LIB})
+add_executable(${PROJECT_NAME} ${HEADERS} ${SOURCES} ${SOURCES_OS} ${SOURCES_NVML} ${HEADERS_CRYPTO} ${SOURCES_CRYPTO} ${SOURCES_SYSLOG} ${HTTPD_SOURCES})
+target_link_libraries(${PROJECT_NAME} xmrig-cuda ${UV_LIBRARIES} ${MHD_LIBRARY} ${LIBS} ${EXTRA_LIBS} ${CPUID_LIB})

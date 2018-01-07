@@ -33,20 +33,20 @@
 #endif
 
 
-#ifndef XMRIG_NO_HTTPD
-#   include <microhttpd.h>
-#endif
-
-
 #include "Cpu.h"
 #include "donate.h"
 #include "net/Url.h"
+#include "nvidia/cryptonight.h"
+#include "nvidia/NvmlApi.h"
 #include "Options.h"
 #include "Platform.h"
 #include "rapidjson/document.h"
 #include "rapidjson/error/en.h"
 #include "rapidjson/filereadstream.h"
+#include "rapidjson/filewritestream.h"
+#include "rapidjson/prettywriter.h"
 #include "version.h"
+#include "workers/GpuThread.h"
 
 
 #ifndef ARRAY_SIZE
@@ -59,98 +59,101 @@ Options *Options::m_self = nullptr;
 
 static char const usage[] = "\
 Usage: " APP_ID " [OPTIONS]\n\
+\n\
 Options:\n\
-  -a, --algo=ALGO          cryptonight (default) or cryptonight-lite\n\
-  -o, --url=URL            URL of mining server\n\
-  -O, --userpass=U:P       username:password pair for mining server\n\
-  -u, --user=USERNAME      username for mining server\n\
-  -p, --pass=PASSWORD      password for mining server\n\
-  -t, --threads=N          number of miner threads\n\
-  -v, --av=N               algorithm variation, 0 auto select\n\
-  -k, --keepalive          send keepalived for prevent timeout (need pool support)\n\
-  -r, --retries=N          number of times to retry before switch to backup server (default: 5)\n\
-  -R, --retry-pause=N      time to pause between retries (default: 5)\n\
-      --cpu-affinity       set process affinity to CPU core(s), mask 0x3 for cores 0 and 1\n\
-      --cpu-priority       set process priority (0 idle, 2 normal to 5 highest)\n\
-      --no-huge-pages      disable huge pages support\n\
-      --no-color           disable colored output\n\
-      --donate-level=N     donate level, default 5%% (5 minutes in 100 minutes)\n\
-      --user-agent         set custom user-agent string for pool\n\
-  -B, --background         run the miner in the background\n\
-  -c, --config=FILE        load a JSON-format configuration file\n\
-  -l, --log-file=FILE      log all output to a file\n"
+  -a, --algo=ALGO           cryptonight (default) or cryptonight-lite\n\
+  -o, --url=URL             URL of mining server\n\
+  -O, --userpass=U:P        username:password pair for mining server\n\
+  -u, --user=USERNAME       username for mining server\n\
+  -p, --pass=PASSWORD       password for mining server\n\
+  -k, --keepalive           send keepalived for prevent timeout (need pool support)\n\
+  -r, --retries=N           number of times to retry before switch to backup server (default: 5)\n\
+  -R, --retry-pause=N       time to pause between retries (default: 5)\n\
+      --cuda-devices=N      list of CUDA devices to use.\n\
+      --cuda-launch=TxB     list of launch config for the CryptoNight kernel\n\
+      --cuda-max-threads=N  limit maximum count of GPU threads in automatic mode\n\
+      --cuda-bfactor=[0-12] run CryptoNight core kernel in smaller pieces\n\
+      --cuda-bsleep=N       insert a delay of N microseconds between kernel launches\n\
+      --cuda-affinity=N     affine GPU threads to a CPU\n\
+      --no-color            disable colored output\n\
+      --donate-level=N      donate level, default 5%% (5 minutes in 100 minutes)\n\
+      --user-agent          set custom user-agent string for pool\n\
+  -B, --background          run the miner in the background\n\
+  -c, --config=FILE         load a JSON-format configuration file\n\
+  -l, --log-file=FILE       log all output to a file\n"
 # ifdef HAVE_SYSLOG_H
 "\
-  -S, --syslog             use system log for output messages\n"
+  -S, --syslog              use system log for output messages\n"
 # endif
 "\
-      --max-cpu-usage=N    maximum CPU usage for automatic threads mode (default 75)\n\
-      --safe               safe adjust threads and av settings for current CPU\n\
-      --nicehash           enable nicehash/xmrig-proxy support\n\
-      --print-time=N       print hashrate report every N seconds\n\
-      --api-port=N         port for the miner API\n\
-      --api-access-token=T access token for API\n\
-      --api-worker-id=ID   custom worker-id for API\n\
-  -h, --help               display this help and exit\n\
-  -V, --version            output version information and exit\n\
+      --nicehash            enable nicehash support\n\
+      --print-time=N        print hashrate report every N seconds\n\
+      --api-port=N          port for the miner API\n\
+      --api-access-token=T  access token for API\n\
+      --api-worker-id=ID    custom worker-id for API\n\
+  -h, --help                display this help and exit\n\
+  -V, --version             output version information and exit\n\
 ";
 
 
-static char const short_options[] = "a:c:khBp:Px:r:R:s:t:T:o:u:O:v:Vl:S";
+static char const short_options[] = "a:c:khBp:Px:r:R:s:T:o:u:O:Vl:S";
 
 
 static struct option const options[] = {
     { "algo",             1, nullptr, 'a'  },
-    { "av",               1, nullptr, 'v'  },
+    { "api-access-token", 1, nullptr, 4001 },
+    { "api-port",         1, nullptr, 4000 },
+    { "api-worker-id",    1, nullptr, 4002 },
     { "background",       0, nullptr, 'B'  },
+    { "bfactor",          1, nullptr, 1201 },
+    { "bsleep",           1, nullptr, 1202 },
     { "config",           1, nullptr, 'c'  },
-    { "cpu-affinity",     1, nullptr, 1020 },
-    { "cpu-priority",     1, nullptr, 1021 },
+    { "cuda-affinity",    1, nullptr, 1205 },
+    { "cuda-bfactor",     1, nullptr, 1201 }, // deprecated, use --cuda-bfactor instead.
+    { "cuda-bsleep",      1, nullptr, 1202 }, // deprecated, use --cuda-bsleep instead.
+    { "cuda-devices",     1, nullptr, 1203 },
+    { "cuda-launch",      1, nullptr, 1204 },
+    { "cuda-max-threads", 1, nullptr, 1200 },
     { "donate-level",     1, nullptr, 1003 },
     { "help",             0, nullptr, 'h'  },
     { "keepalive",        0, nullptr ,'k'  },
     { "log-file",         1, nullptr, 'l'  },
-    { "max-cpu-usage",    1, nullptr, 1004 },
+    { "max-gpu-threads",  1, nullptr, 1200 }, // deprecated, use --cuda-max-threads instead.
+    { "max-gpu-usage",    1, nullptr, 1004 }, // deprecated.
     { "nicehash",         0, nullptr, 1006 },
     { "no-color",         0, nullptr, 1002 },
-    { "no-huge-pages",    0, nullptr, 1009 },
     { "pass",             1, nullptr, 'p'  },
     { "print-time",       1, nullptr, 1007 },
     { "retries",          1, nullptr, 'r'  },
     { "retry-pause",      1, nullptr, 'R'  },
-    { "safe",             0, nullptr, 1005 },
     { "syslog",           0, nullptr, 'S'  },
-    { "threads",          1, nullptr, 't'  },
     { "url",              1, nullptr, 'o'  },
     { "user",             1, nullptr, 'u'  },
     { "user-agent",       1, nullptr, 1008 },
     { "userpass",         1, nullptr, 'O'  },
     { "version",          0, nullptr, 'V'  },
-    { "api-port",         1, nullptr, 4000 },
-    { "api-access-token", 1, nullptr, 4001 },
-    { "api-worker-id",    1, nullptr, 4002 },
     { 0, 0, 0, 0 }
 };
 
 
 static struct option const config_options[] = {
-    { "algo",          1, nullptr, 'a'  },
-    { "av",            1, nullptr, 'v'  },
-    { "background",    0, nullptr, 'B'  },
-    { "colors",        0, nullptr, 2000 },
-    { "cpu-affinity",  1, nullptr, 1020 },
-    { "cpu-priority",  1, nullptr, 1021 },
-    { "donate-level",  1, nullptr, 1003 },
-    { "huge-pages",    0, nullptr, 1009 },
-    { "log-file",      1, nullptr, 'l'  },
-    { "max-cpu-usage", 1, nullptr, 1004 },
-    { "print-time",    1, nullptr, 1007 },
-    { "retries",       1, nullptr, 'r'  },
-    { "retry-pause",   1, nullptr, 'R'  },
-    { "safe",          0, nullptr, 1005 },
-    { "syslog",        0, nullptr, 'S'  },
-    { "threads",       1, nullptr, 't'  },
-    { "user-agent",    1, nullptr, 1008 },
+    { "algo",             1, nullptr, 'a'  },
+    { "background",       0, nullptr, 'B'  },
+    { "bfactor",          1, nullptr, 1201 }, // deprecated, use --cuda-bfactor instead.
+    { "bsleep",           1, nullptr, 1202 }, // deprecated, use --cuda-bsleep instead.
+    { "colors",           0, nullptr, 2000 },
+    { "cuda-bfactor",     1, nullptr, 1201 },
+    { "cuda-bsleep",      1, nullptr, 1202 },
+    { "cuda-max-threads", 1, nullptr, 1200 },
+    { "donate-level",     1, nullptr, 1003 },
+    { "log-file",         1, nullptr, 'l'  },
+    { "max-gpu-threads",  1, nullptr, 1200 }, // deprecated, use --cuda-max-threads instead.
+    { "max-gpu-usage",    1, nullptr, 1004 }, // deprecated.
+    { "print-time",       1, nullptr, 1007 },
+    { "retries",          1, nullptr, 'r'  },
+    { "retry-pause",      1, nullptr, 'R'  },
+    { "syslog",           0, nullptr, 'S'  },
+    { "user-agent",       1, nullptr, 1008 },
     { 0, 0, 0, 0 }
 };
 
@@ -195,6 +198,99 @@ Options *Options::parse(int argc, char **argv)
 }
 
 
+bool Options::save()
+{
+    if (m_configName == nullptr) {
+        return false;
+    }
+
+    uv_fs_t req;
+    const int fd = uv_fs_open(uv_default_loop(), &req, m_configName, O_WRONLY | O_CREAT | O_TRUNC, 0644, nullptr);
+    if (fd < 0) {
+        return false;
+    }
+
+    uv_fs_req_cleanup(&req);
+
+    rapidjson::Document doc;
+    doc.SetObject();
+
+    auto &allocator = doc.GetAllocator();
+
+    doc.AddMember("algo",         rapidjson::StringRef(algoName()), allocator);
+    doc.AddMember("background",   m_background, allocator);
+    doc.AddMember("colors",       m_colors, allocator);
+    doc.AddMember("donate-level", m_donateLevel, allocator);
+    doc.AddMember("log-file",     m_logFile ? rapidjson::Value(rapidjson::StringRef(algoName())).Move() : rapidjson::Value(rapidjson::kNullType).Move(), allocator);
+    doc.AddMember("print-time",   m_printTime, allocator);
+    doc.AddMember("retries",      m_retries, allocator);
+    doc.AddMember("retry-pause",  m_retryPause, allocator);
+
+#   ifdef HAVE_SYSLOG_H
+    doc.AddMember("syslog", m_syslog, allocator);
+#   endif
+
+    rapidjson::Value threads(rapidjson::kArrayType);
+    for (const GpuThread *thread : m_threads) {
+        rapidjson::Value obj(rapidjson::kObjectType);
+
+        obj.AddMember("index",   thread->index(), allocator);
+        obj.AddMember("threads", thread->threads(), allocator);
+        obj.AddMember("blocks",  thread->blocks(), allocator);
+        obj.AddMember("bfactor", thread->bfactor(), allocator);
+        obj.AddMember("bsleep",  thread->bsleep(), allocator);
+
+        if (thread->affinity() >= 0) {
+            obj.AddMember("affine_to_cpu", thread->affinity(), allocator);
+        }
+        else {
+            obj.AddMember("affine_to_cpu", false, allocator);
+        }
+
+        threads.PushBack(obj, allocator);
+    }
+
+    rapidjson::Value pools(rapidjson::kArrayType);
+    char tmp[256];
+
+    for (const Url *url : m_pools) {
+        rapidjson::Value obj(rapidjson::kObjectType);
+        snprintf(tmp, sizeof(tmp) - 1, "%s:%d", url->host(), url->port());
+
+        obj.AddMember("url",       rapidjson::StringRef(tmp), allocator);
+        obj.AddMember("user",      rapidjson::StringRef(url->user()), allocator);
+        obj.AddMember("pass",      rapidjson::StringRef(url->password()), allocator);
+        obj.AddMember("keepalive", url->isKeepAlive(), allocator);
+        obj.AddMember("nicehash",  url->isNicehash(), allocator);
+
+        pools.PushBack(obj, allocator);
+    }
+
+    rapidjson::Value api(rapidjson::kObjectType);
+    api.AddMember("port",         m_apiPort, allocator);
+    api.AddMember("access-token", m_apiToken ? rapidjson::Value(rapidjson::StringRef(m_apiToken)).Move() : rapidjson::Value(rapidjson::kNullType).Move(), allocator);
+    api.AddMember("worker-id",    m_apiWorkerId ? rapidjson::Value(rapidjson::StringRef(m_apiWorkerId)).Move() : rapidjson::Value(rapidjson::kNullType).Move(), allocator);
+
+    doc.AddMember("threads", threads, allocator);
+    doc.AddMember("pools",   pools, allocator);
+    doc.AddMember("api",     api, allocator);
+
+    FILE *fp = fdopen(fd, "w");
+
+    char buf[4096];
+    rapidjson::FileWriteStream os(fp, buf, sizeof(buf));
+    rapidjson::PrettyWriter<rapidjson::FileWriteStream> writer(os);
+    doc.Accept(writer);
+
+    fclose(fp);
+
+    uv_fs_close(uv_default_loop(), &req, fd, nullptr);
+    uv_fs_req_cleanup(&req);
+
+    return true;
+}
+
+
 const char *Options::algoName() const
 {
     return algo_names[m_algo];
@@ -202,29 +298,29 @@ const char *Options::algoName() const
 
 
 Options::Options(int argc, char **argv) :
+    m_autoConf(false),
     m_background(false),
     m_colors(true),
-    m_doubleHash(false),
-    m_hugePages(true),
     m_ready(false),
-    m_safe(false),
     m_syslog(false),
     m_apiToken(nullptr),
     m_apiWorkerId(nullptr),
+    m_configName(nullptr),
     m_logFile(nullptr),
     m_userAgent(nullptr),
     m_algo(0),
     m_algoVariant(0),
     m_apiPort(0),
     m_donateLevel(kDonateLevel),
-    m_maxCpuUsage(75),
+    m_maxGpuThreads(64),
+    m_maxGpuUsage(100),
     m_printTime(60),
-    m_priority(-1),
     m_retries(5),
     m_retryPause(5),
-    m_threads(0),
-    m_affinity(-1L)
+    m_threads(0)
 {
+    NvmlApi::init();
+
     m_pools.push_back(new Url());
 
     int key;
@@ -254,18 +350,14 @@ Options::Options(int argc, char **argv) :
         return;
     }
 
-    m_algoVariant = getAlgoVariant();
-    if (m_algoVariant == AV2_AESNI_DOUBLE || m_algoVariant == AV4_SOFT_AES_DOUBLE) {
-        m_doubleHash = true;
-    }
+    m_algoVariant = Cpu::hasAES() ? AV1_AESNI : AV3_SOFT_AES;
 
-    if (!m_threads) {
-        m_threads = Cpu::optimalThreadsCount(m_algo, m_doubleHash, m_maxCpuUsage);
-    }
-    else if (m_safe) {
-        const int count = Cpu::optimalThreadsCount(m_algo, m_doubleHash, m_maxCpuUsage);
-        if (m_threads > count) {
-            m_threads = count;
+    if (m_threads.empty() && !m_cudaCLI.setup(m_threads)) {
+        m_autoConf = true;
+        m_cudaCLI.autoConf(m_threads);
+
+        for (GpuThread *thread : m_threads) {
+            thread->limit(m_maxGpuUsage, m_maxGpuThreads);
         }
     }
 
@@ -273,12 +365,14 @@ Options::Options(int argc, char **argv) :
         url->applyExceptions();
     }
 
+    NvmlApi::bind(m_threads);
     m_ready = true;
 }
 
 
 Options::~Options()
 {
+    NvmlApi::release();
 }
 
 
@@ -303,7 +397,7 @@ bool Options::getJSON(const char *fileName, rapidjson::Document &doc)
     uv_fs_req_cleanup(&req);
 
     if (doc.HasParseError()) {
-        printf("%s:%d: %s\n", fileName, (int) doc.GetErrorOffset(), rapidjson::GetParseError_En(doc.GetParseError()));
+        printf("%s:%d: %s\n", fileName, (int)doc.GetErrorOffset(), rapidjson::GetParseError_En(doc.GetParseError()));
         return false;
     }
 
@@ -369,13 +463,35 @@ bool Options::parseArg(int key, const char *arg)
         m_apiWorkerId = strdup(arg);
         break;
 
+    case 1201: /* --bfactor */
+        m_cudaCLI.parseBFactor(arg);
+        break;
+
+    case 1202: /* --bsleep */
+        m_cudaCLI.parseBSleep(arg);
+        break;
+
+    case 1203: /* --cuda-devices */
+        m_cudaCLI.parseDevices(arg);
+        break;
+
+    case 1204: /* --cuda-launch */
+        m_cudaCLI.parseLaunch(arg);
+        break;
+
+    case 1205: /* --cuda-affinity */
+        m_cudaCLI.parseAffinity(arg);
+        break;
+
     case 'r':  /* --retries */
     case 'R':  /* --retry-pause */
+    case 't':  /* --threads */
     case 'v':  /* --av */
     case 1003: /* --donate-level */
-    case 1004: /* --max-cpu-usage */
+    case 1004: /* --max-gpu-usage */
     case 1007: /* --print-time */
-    case 1021: /* --cpu-priority */
+    case 1200: /* --max-gpu-threads */
+
     case 4000: /* --api-port */
         return parseArg(key, strtol(arg, nullptr, 10));
 
@@ -387,16 +503,7 @@ bool Options::parseArg(int key, const char *arg)
         return parseBoolean(key, true);
 
     case 1002: /* --no-color */
-    case 1009: /* --no-huge-pages */
         return parseBoolean(key, false);
-
-    case 't':  /* --threads */
-        if (strncmp(arg, "all", 3) == 0) {
-            m_threads = Cpu::threads();
-            return true;
-        }
-
-        return parseArg(key, strtol(arg, nullptr, 10));
 
     case 'V': /* --version */
         showVersion();
@@ -409,11 +516,6 @@ bool Options::parseArg(int key, const char *arg)
     case 'c': /* --config */
         parseConfig(arg);
         break;
-
-    case 1020: { /* --cpu-affinity */
-            const char *p  = strstr(arg, "0x");
-            return parseArg(key, p ? strtoull(p, nullptr, 16) : strtoull(arg, nullptr, 10));
-        }
 
     case 1008: /* --user-agent */
         free(m_userAgent);
@@ -456,16 +558,7 @@ bool Options::parseArg(int key, uint64_t arg)
             return false;
         }
 
-        m_threads = (int) arg;
-        break;
-
-    case 'v': /* --av */
-        if (arg > 1000) {
-            showUsage(1);
-            return false;
-        }
-
-        m_algoVariant = (int) arg;
+        //m_threads = arg;
         break;
 
     case 1003: /* --donate-level */
@@ -476,13 +569,13 @@ bool Options::parseArg(int key, uint64_t arg)
         m_donateLevel = (int) arg;
         break;
 
-    case 1004: /* --max-cpu-usage */
+    case 1004: /* --max-gpu-usage */
         if (arg < 1 || arg > 100) {
             showUsage(1);
             return false;
         }
 
-        m_maxCpuUsage = (int) arg;
+        m_maxGpuUsage = (int) arg;
         break;
 
     case 1007: /* --print-time */
@@ -494,21 +587,13 @@ bool Options::parseArg(int key, uint64_t arg)
         m_printTime = (int) arg;
         break;
 
-    case 1020: /* --cpu-affinity */
-        if (arg) {
-            m_affinity = arg;
-        }
-        break;
-
-    case 1021: /* --cpu-priority */
-        if (arg <= 5) {
-            m_priority = (int) arg;
-        }
+    case 1200: /* --max-gpu-threads */
+        m_maxGpuThreads = (int) arg;
         break;
 
     case 4000: /* --api-port */
         if (arg <= 65536) {
-            m_apiPort = (int) arg;
+            m_apiPort = (int)arg;
         }
         break;
 
@@ -541,16 +626,8 @@ bool Options::parseBoolean(int key, bool enable)
         m_colors = enable;
         break;
 
-    case 1005: /* --safe */
-        m_safe = enable;
-        break;
-
     case 1006: /* --nicehash */
         m_pools.back()->setNicehash(enable);
-        break;
-
-    case 1009: /* --no-huge-pages */
-        m_hugePages = enable;
         break;
 
     case 2000: /* colors */
@@ -584,6 +661,8 @@ void Options::parseConfig(const char *fileName)
         return;
     }
 
+    m_configName = strdup(fileName);
+
     for (size_t i = 0; i < ARRAY_SIZE(config_options); i++) {
         parseJSON(&config_options[i], doc);
     }
@@ -598,6 +677,17 @@ void Options::parseConfig(const char *fileName)
             for (size_t i = 0; i < ARRAY_SIZE(pool_options); i++) {
                 parseJSON(&pool_options[i], value);
             }
+        }
+    }
+
+    const rapidjson::Value &threads = doc["threads"];
+    if (pools.IsArray()) {
+        for (const rapidjson::Value &value : threads.GetArray()) {
+            if (!value.IsObject()) {
+                continue;
+            }
+
+            parseThread(value);
         }
     }
 
@@ -628,6 +718,30 @@ void Options::parseJSON(const struct option *option, const rapidjson::Value &obj
         parseBoolean(option->val, value.IsTrue());
     }
 }
+
+
+void Options::parseThread(const rapidjson::Value &object)
+{
+    GpuThread *thread = new GpuThread();
+    thread->setIndex(object["index"].GetInt());
+    thread->setThreads(object["threads"].GetInt());
+    thread->setBlocks(object["blocks"].GetInt());
+    thread->setBFactor(object["bfactor"].GetInt());
+    thread->setBSleep(object["bsleep"].GetInt());
+
+    const rapidjson::Value &affinity = object["affine_to_cpu"];
+    if (affinity.IsInt()) {
+        thread->setAffinity(affinity.GetInt());
+    }
+
+    if (thread->init()) {
+        m_threads.push_back(thread);
+        return;
+    }
+
+    delete thread;
+}
+
 
 
 void Options::showUsage(int status) const
@@ -671,9 +785,8 @@ void Options::showVersion()
 
     printf("\nlibuv/%s\n", uv_version_string());
 
-#   ifndef XMRIG_NO_HTTPD
-    printf("libmicrohttpd/%s\n", MHD_get_version());
-#   endif
+    const int cudaVersion = cuda_get_runtime_version();
+    printf("CUDA/%d.%d\n", cudaVersion / 1000, cudaVersion % 100);
 }
 
 
@@ -700,39 +813,3 @@ bool Options::setAlgo(const char *algo)
 
     return true;
 }
-
-
-int Options::getAlgoVariant() const
-{
-#   ifndef XMRIG_NO_AEON
-    if (m_algo == ALGO_CRYPTONIGHT_LITE) {
-        return getAlgoVariantLite();
-    }
-#   endif
-
-    if (m_algoVariant <= AV0_AUTO || m_algoVariant >= AV_MAX) {
-        return Cpu::hasAES() ? AV1_AESNI : AV3_SOFT_AES;
-    }
-
-    if (m_safe && !Cpu::hasAES() && m_algoVariant <= AV2_AESNI_DOUBLE) {
-        return m_algoVariant + 2;
-    }
-
-    return m_algoVariant;
-}
-
-
-#ifndef XMRIG_NO_AEON
-int Options::getAlgoVariantLite() const
-{
-    if (m_algoVariant <= AV0_AUTO || m_algoVariant >= AV_MAX) {
-        return Cpu::hasAES() ? AV2_AESNI_DOUBLE : AV4_SOFT_AES_DOUBLE;
-    }
-
-    if (m_safe && !Cpu::hasAES() && m_algoVariant <= AV2_AESNI_DOUBLE) {
-        return m_algoVariant + 2;
-    }
-
-    return m_algoVariant;
-}
-#endif

@@ -26,14 +26,13 @@
 
 
 #include <stdint.h>
-#include <uv.h>
 
 
 class Hashrate
 {
 public:
     enum Intervals {
-        ShortInterval  = 2500,
+        ShortInterval  = 10000,
         MediumInterval = 60000,
         LargeInterval  = 900000
     };
@@ -43,15 +42,13 @@ public:
     double calc(size_t threadId, size_t ms) const;
     void add(size_t threadId, uint64_t count, uint64_t timestamp);
     void print();
+    void print(size_t threadId, int gpuId);
     void stop();
     void updateHighest();
 
     inline double highest() const { return m_highest; }
-    inline int threads() const    { return m_threads; }
 
 private:
-    static void onReport(uv_timer_t *handle);
-
     constexpr static size_t kBucketSize = 2 << 11;
     constexpr static size_t kBucketMask = kBucketSize - 1;
 
@@ -60,7 +57,6 @@ private:
     uint32_t* m_top;
     uint64_t** m_counts;
     uint64_t** m_timestamps;
-    uv_timer_t m_timer;
 };
 
 

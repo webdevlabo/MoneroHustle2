@@ -34,7 +34,6 @@
 
 #include "api/ApiState.h"
 #include "Cpu.h"
-#include "Mem.h"
 #include "net/Job.h"
 #include "Options.h"
 #include "Platform.h"
@@ -63,7 +62,7 @@ static inline double normalize(double d)
 
 ApiState::ApiState()
 {
-    m_threads  = Options::i()->threads();
+    m_threads  = (int) Options::i()->threads().size();
     m_hashrate = new double[m_threads * 3]();
 
     memset(m_totalHashrate, 0, sizeof(m_totalHashrate));
@@ -77,6 +76,11 @@ ApiState::ApiState()
     }
 
     genId();
+
+    for (const GpuThread *thread : Options::i()->threads()) {
+        m_gpuThreads.push_back(*thread);
+        m_health.push_back(Health());
+    }
 }
 
 
@@ -94,10 +98,17 @@ char *ApiState::get(const char *url, int *status) const
     getIdentify(doc);
     getMiner(doc);
     getHashrate(doc);
+    getHealth(doc);
     getResults(doc);
     getConnection(doc);
 
     return finalize(doc);
+}
+
+
+void ApiState::setHealth(const std::vector<Health> &health)
+{
+    m_health = health;
 }
 
 
@@ -202,10 +213,33 @@ void ApiState::getHashrate(rapidjson::Document &doc) const
         threads.PushBack(thread, allocator);
     }
 
-    hashrate.AddMember("total", total, allocator);
+    hashrate.AddMember("total",   total, allocator);
     hashrate.AddMember("highest", normalize(m_highestHashrate), allocator);
     hashrate.AddMember("threads", threads, allocator);
-    doc.AddMember("hashrate", hashrate, allocator);
+    doc.AddMember("hashrate",     hashrate, allocator);
+}
+
+
+void ApiState::getHealth(rapidjson::Document &doc) const
+{
+    auto &allocator = doc.GetAllocator();
+
+    rapidjson::Value health(rapidjson::kArrayType);
+
+    for (size_t i = 0; i < m_gpuThreads.size(); i++) {
+        rapidjson::Value record(rapidjson::kObjectType);
+
+        record.AddMember("name",      rapidjson::StringRef(m_gpuThreads[i].name()), allocator);
+        record.AddMember("clock",     m_health[i].clock, allocator);
+        record.AddMember("mem_clock", m_health[i].memClock, allocator);
+        record.AddMember("power",     m_health[i].power / 1000, allocator);
+        record.AddMember("temp",      m_health[i].temperature, allocator);
+        record.AddMember("fan",       m_health[i].fanSpeed, allocator);
+
+        health.PushBack(record, allocator);
+    }
+
+    doc.AddMember("health", health, allocator);
 }
 
 
@@ -231,7 +265,7 @@ void ApiState::getMiner(rapidjson::Document &doc) const
     doc.AddMember("ua",           rapidjson::StringRef(Platform::userAgent()), allocator);
     doc.AddMember("cpu",          cpu, allocator);
     doc.AddMember("algo",         rapidjson::StringRef(Options::i()->algoName()), allocator);
-    doc.AddMember("hugepages",    Mem::isHugepagesEnabled(), allocator);
+    doc.AddMember("hugepages",    false, allocator);
     doc.AddMember("donate_level", Options::i()->donateLevel(), allocator);
 }
 

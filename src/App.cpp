@@ -34,7 +34,6 @@
 #include "log/ConsoleLog.h"
 #include "log/FileLog.h"
 #include "log/Log.h"
-#include "Mem.h"
 #include "net/Network.h"
 #include "Options.h"
 #include "Platform.h"
@@ -88,13 +87,10 @@ App::App(int argc, char **argv) :
 #   endif
 
     Platform::init(m_options->userAgent());
-    Platform::setProcessPriority(m_options->priority());
 
     m_network = new Network(m_options);
 
-    uv_signal_init(uv_default_loop(), &m_sigHUP);
-    uv_signal_init(uv_default_loop(), &m_sigINT);
-    uv_signal_init(uv_default_loop(), &m_sigTERM);
+    uv_signal_init(uv_default_loop(), &m_signal);
 }
 
 
@@ -116,9 +112,9 @@ int App::exec()
         return 0;
     }
 
-    uv_signal_start(&m_sigHUP,  App::onSignal, SIGHUP);
-    uv_signal_start(&m_sigINT,  App::onSignal, SIGINT);
-    uv_signal_start(&m_sigTERM, App::onSignal, SIGTERM);
+    uv_signal_start(&m_signal, App::onSignal, SIGHUP);
+    uv_signal_start(&m_signal, App::onSignal, SIGTERM);
+    uv_signal_start(&m_signal, App::onSignal, SIGINT);
 
     background();
 
@@ -127,8 +123,9 @@ int App::exec()
         return 1;
     }
 
-    Mem::allocate(m_options->algo(), m_options->threads(), m_options->doubleHash(), m_options->hugePages());
-    Summary::print();
+    if (!Summary::print()) {
+        return 1;
+    }
 
 #   ifndef XMRIG_NO_API
     Api::start();
@@ -139,7 +136,7 @@ int App::exec()
     m_httpd->start();
 #   endif
 
-    Workers::start(m_options->affinity(), m_options->priority());
+    Workers::start(m_options->threads());
 
     m_network->connect();
 
@@ -149,7 +146,6 @@ int App::exec()
     delete m_network;
 
     Options::release();
-    Mem::release();
     Platform::release();
 
     return r;
@@ -176,6 +172,11 @@ void App::onConsoleCommand(char command)
             LOG_INFO(m_options->colors() ? "\x1B[01;32mresumed" : "resumed");
             Workers::setEnabled(true);
         }
+        break;
+
+    case 'E':
+    case 'e':
+        Workers::printHealth();
         break;
 
     case 3:

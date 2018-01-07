@@ -25,7 +25,12 @@
 #define __APISTATE_H__
 
 
+#include <vector>
+
+
 #include "api/NetworkState.h"
+#include "workers/GpuThread.h"
+#include "nvidia/Health.h"
 #include "rapidjson/fwd.h"
 
 
@@ -39,6 +44,7 @@ public:
     ~ApiState();
 
     char *get(const char *url, int *status) const;
+    void setHealth(const std::vector<Health> &health);
     void tick(const Hashrate *hashrate);
     void tick(const NetworkState &results);
 
@@ -47,6 +53,7 @@ private:
     void genId();
     void getConnection(rapidjson::Document &doc) const;
     void getHashrate(rapidjson::Document &doc) const;
+    void getHealth(rapidjson::Document &doc) const;
     void getIdentify(rapidjson::Document &doc) const;
     void getMiner(rapidjson::Document &doc) const;
     void getResults(rapidjson::Document &doc) const;
@@ -58,6 +65,8 @@ private:
     double m_totalHashrate[3];
     int m_threads;
     NetworkState m_network;
+    std::vector<GpuThread> m_gpuThreads;
+    std::vector<Health> m_health;
 };
 
 #endif /* __APISTATE_H__ */

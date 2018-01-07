@@ -29,9 +29,11 @@
 #include <vector>
 
 
+#include "nvidia/CudaCLI.h"
 #include "rapidjson/fwd.h"
 
 
+class GpuThread;
 class Url;
 struct option;
 
@@ -47,39 +49,38 @@ public:
     enum AlgoVariant {
         AV0_AUTO,
         AV1_AESNI,
-        AV2_AESNI_DOUBLE,
+        AV2_UNUSED,
         AV3_SOFT_AES,
-        AV4_SOFT_AES_DOUBLE,
+        AV4_UNUSED,
         AV_MAX
     };
 
     static inline Options* i() { return m_self; }
     static Options *parse(int argc, char **argv);
 
-    inline bool background() const                { return m_background; }
-    inline bool colors() const                    { return m_colors; }
-    inline bool doubleHash() const                { return m_doubleHash; }
-    inline bool hugePages() const                 { return m_hugePages; }
-    inline bool syslog() const                    { return m_syslog; }
-    inline const char *apiToken() const           { return m_apiToken; }
-    inline const char *apiWorkerId() const        { return m_apiWorkerId; }
-    inline const char *logFile() const            { return m_logFile; }
-    inline const char *userAgent() const          { return m_userAgent; }
-    inline const std::vector<Url*> &pools() const { return m_pools; }
-    inline int algo() const                       { return m_algo; }
-    inline int algoVariant() const                { return m_algoVariant; }
-    inline int apiPort() const                    { return m_apiPort; }
-    inline int donateLevel() const                { return m_donateLevel; }
-    inline int printTime() const                  { return m_printTime; }
-    inline int priority() const                   { return m_priority; }
-    inline int retries() const                    { return m_retries; }
-    inline int retryPause() const                 { return m_retryPause; }
-    inline int threads() const                    { return m_threads; }
-    inline int64_t affinity() const               { return m_affinity; }
-    inline void setColors(bool colors)            { m_colors = colors; }
+    inline bool background() const                        { return m_background; }
+    inline bool colors() const                            { return m_colors; }
+    inline bool isAutoConf() const                        { return m_autoConf; }
+    inline bool syslog() const                            { return m_syslog; }
+    inline const char *apiToken() const                   { return m_apiToken; }
+    inline const char *apiWorkerId() const                { return m_apiWorkerId; }
+    inline const char *configName() const                 { return m_configName; }
+    inline const char *logFile() const                    { return m_logFile; }
+    inline const char *userAgent() const                  { return m_userAgent; }
+    inline const std::vector<GpuThread*> &threads() const { return m_threads; }
+    inline const std::vector<Url*> &pools() const         { return m_pools; }
+    inline int algo() const                               { return m_algo; }
+    inline int algoVariant() const                        { return m_algoVariant; }
+    inline int apiPort() const                            { return m_apiPort; }
+    inline int donateLevel() const                        { return m_donateLevel; }
+    inline int maxGpuThreads() const                      { return m_maxGpuThreads; }
+    inline int printTime() const                          { return m_printTime; }
+    inline int retries() const                            { return m_retries; }
+    inline int retryPause() const                         { return m_retryPause; }
 
-    inline static void release()                  { delete m_self; }
+    inline static void release()                          { delete m_self; }
 
+    bool save();
     const char *algoName() const;
 
 private:
@@ -97,38 +98,33 @@ private:
     Url *parseUrl(const char *arg) const;
     void parseConfig(const char *fileName);
     void parseJSON(const struct option *option, const rapidjson::Value &object);
+    void parseThread(const rapidjson::Value &object);
     void showUsage(int status) const;
     void showVersion(void);
 
     bool setAlgo(const char *algo);
 
-    int getAlgoVariant() const;
-#   ifndef XMRIG_NO_AEON
-    int getAlgoVariantLite() const;
-#   endif
-
+    bool m_autoConf;
     bool m_background;
     bool m_colors;
-    bool m_doubleHash;
-    bool m_hugePages;
     bool m_ready;
-    bool m_safe;
     bool m_syslog;
     char *m_apiToken;
     char *m_apiWorkerId;
+    char *m_configName;
     char *m_logFile;
     char *m_userAgent;
+    CudaCLI m_cudaCLI;
     int m_algo;
     int m_algoVariant;
     int m_apiPort;
     int m_donateLevel;
-    int m_maxCpuUsage;
+    int m_maxGpuThreads;
+    int m_maxGpuUsage;
     int m_printTime;
-    int m_priority;
     int m_retries;
     int m_retryPause;
-    int m_threads;
-    int64_t m_affinity;
+    std::vector<GpuThread*> m_threads;
     std::vector<Url*> m_pools;
 };
 
